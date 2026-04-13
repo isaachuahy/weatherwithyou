@@ -8,10 +8,10 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from weatherwithyou.clients.geocoding import GeocodingProviderError, LocationNotFoundError
-from weatherwithyou.clients.weather import WeatherProviderError
+from weatherwithyou.clients.weather_client import WeatherProviderError
 from weatherwithyou.db import get_db_session
 from weatherwithyou.models.weather_query import WeatherQuery
-from weatherwithyou.schemas.weather import (
+from weatherwithyou.schemas.weather_schemas import (
     WeatherCreateRequest,
     WeatherMode,
     WeatherQueryResponse,
@@ -20,7 +20,7 @@ from weatherwithyou.schemas.weather import (
 from weatherwithyou.services.weather_service import WeatherService
 
 
-router = APIRouter(prefix="/weather", tags=["weather"])
+router = APIRouter(prefix="/weather", tags=["weather"]) 
 
 
 def _get_weather_query_or_404(db_session: Session, weather_query_id: UUID) -> WeatherQuery:
@@ -130,7 +130,7 @@ def update_weather_lookup(
         return service.update_weather_query(weather_query, payload)
     except LocationNotFoundError as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, # 422 is appropriate here since the client provided a location that doesn't exist, which is a validation issue with the input rather than a server error.
             detail={
                 "error": {
                     "code": "LOCATION_NOT_FOUND",
@@ -140,7 +140,7 @@ def update_weather_lookup(
         ) from exc
     except GeocodingProviderError as exc:
         raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
+            status_code=status.HTTP_502_BAD_GATEWAY, # 502 is appropriate here since the error occurred while trying to communicate with an external geocoding provider, which is a server-side issue outside of the client's control.
             detail={
                 "error": {
                     "code": "GEOCODING_PROVIDER_ERROR",
@@ -158,7 +158,6 @@ def update_weather_lookup(
                 }
             },
         ) from exc
-
 
 @router.delete("/{weather_query_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_weather_lookup(

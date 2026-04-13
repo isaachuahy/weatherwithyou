@@ -4,7 +4,7 @@ from unittest.mock import Mock
 
 from weatherwithyou.clients.geocoding import ResolvedLocation
 from weatherwithyou.models.weather_query import WeatherQuery
-from weatherwithyou.schemas.weather import (
+from weatherwithyou.schemas.weather_schemas import (
     WeatherCreateRequest,
     WeatherMode,
     WeatherUnits,

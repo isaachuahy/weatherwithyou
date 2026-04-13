@@ -4,7 +4,7 @@ from typing import Any
 
 import httpx
 
-from weatherwithyou.schemas.weather import WeatherMode, WeatherUnits
+from weatherwithyou.schemas.weather_schemas import WeatherMode, WeatherUnits
 from weatherwithyou.settings import get_settings
 
 # We can choose to define the specific variables we want to fetch from the provider for each mode, 
