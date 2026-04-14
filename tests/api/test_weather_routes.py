@@ -229,3 +229,52 @@ def test_export_weather_lookups_returns_csv_rows() -> None:
     assert "attachment; filename=\"weather-lookups.csv\"" == response.headers["content-disposition"]
     assert "start_datetime,end_datetime" in response.text
     assert "2024-04-01 09:00:00+00:00" in response.text
+
+
+def test_get_weather_lookup_returns_requested_enrichment() -> None:
+    mock_session = Mock()
+    weather_query = _sample_weather_query()
+    weather_query.enrichment = {
+        "map": {
+            "provider": "google-maps",
+            "embedUrl": "https://www.google.com/maps/embed/v1/place?key=test&q=London",
+            "query": "London, Ontario, Canada",
+            "latitude": "42.983390",
+            "longitude": "-81.233040",
+        },
+        "youtubeVideos": [
+            {
+                "provider": "youtube",
+                "videoId": "abc123",
+                "title": "Walking around London, Ontario",
+                "channelTitle": "Example Channel",
+                "thumbnailUrl": "https://i.ytimg.com/vi/abc123/hqdefault.jpg",
+                "embedUrl": "https://www.youtube.com/embed/abc123",
+            }
+        ],
+        "pun": {
+            "provider": "gemini-flash",
+            "text": "London’s forecast is looking reigneously bright.",
+        },
+    }
+    mock_session.get.return_value = weather_query
+    app.dependency_overrides[get_db_session] = lambda: mock_session
+
+    with patch(
+        "weatherwithyou.api.routes.weather_routes.WeatherService.attach_enrichment",
+        return_value=weather_query,
+    ) as attach_enrichment:
+        client = TestClient(app)
+        response = client.get(
+            f"/weather/{weather_query.id}",
+            params=[("include", "map"), ("include", "youtube"), ("include", "pun")],
+        )
+
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["enrichment"]["map"]["provider"] == "google-maps"
+    assert body["enrichment"]["youtubeVideos"][0]["videoId"] == "abc123"
+    assert body["enrichment"]["pun"]["provider"] == "gemini-flash"
+    attach_enrichment.assert_called_once()

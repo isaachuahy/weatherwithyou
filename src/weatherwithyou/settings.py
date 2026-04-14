@@ -2,6 +2,17 @@ from dataclasses import dataclass
 from functools import lru_cache
 import os
 
+try:
+    from dotenv import load_dotenv
+except ImportError:  # pragma: no cover - this fallback only matters before deps are installed.
+    load_dotenv = None
+
+
+if load_dotenv is not None:
+    # Load the repo's .env file into the process environment once so the rest of
+    # the settings module can stay simple and continue using os.getenv().
+    load_dotenv()
+
 
 def _get_bool(name: str, default: bool) -> bool:
     value = os.getenv(name)
@@ -19,6 +30,14 @@ def _get_float(name: str, default: float) -> float:
     return float(value)
 
 
+def _get_int(name: str, default: int) -> int:
+    value = os.getenv(name)
+    if value is None:
+        return default
+
+    return int(value)
+
+
 @dataclass(frozen=True, slots=True)
 class Settings:
     app_name: str
@@ -31,6 +50,13 @@ class Settings:
     nominatim_user_agent: str
     open_meteo_forecast_base_url: str
     open_meteo_archive_base_url: str
+    google_maps_embed_api_key: str | None
+    google_maps_embed_base_url: str
+    youtube_data_api_key: str | None
+    youtube_data_api_base_url: str
+    youtube_max_results: int
+    gemini_api_key: str | None
+    gemini_model: str
 
 
 @lru_cache
@@ -63,4 +89,17 @@ def get_settings() -> Settings:
             "OPEN_METEO_ARCHIVE_BASE_URL",
             "https://archive-api.open-meteo.com/v1",
         ),
+        google_maps_embed_api_key=os.getenv("GOOGLE_MAPS_EMBED_API_KEY"),
+        google_maps_embed_base_url=os.getenv(
+            "GOOGLE_MAPS_EMBED_BASE_URL",
+            "https://www.google.com/maps/embed/v1",
+        ),
+        youtube_data_api_key=os.getenv("YOUTUBE_DATA_API_KEY"),
+        youtube_data_api_base_url=os.getenv(
+            "YOUTUBE_DATA_API_BASE_URL",
+            "https://www.googleapis.com/youtube/v3",
+        ),
+        youtube_max_results=_get_int("YOUTUBE_MAX_RESULTS", 3),
+        gemini_api_key=os.getenv("GEMINI_API_KEY"),
+        gemini_model=os.getenv("GEMINI_MODEL", "gemini-2.5-flash"),
     )

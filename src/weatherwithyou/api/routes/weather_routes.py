@@ -14,6 +14,7 @@ from weatherwithyou.db import get_db_session
 from weatherwithyou.models.weather_query import WeatherQuery
 from weatherwithyou.schemas.weather_schemas import (
     WeatherCreateRequest,
+    WeatherEnrichmentType,
     WeatherMode,
     WeatherQueryResponse,
     WeatherUpdateRequest,
@@ -22,6 +23,12 @@ from weatherwithyou.services.weather_service import WeatherService
 
 
 router = APIRouter(prefix="/weather", tags=["weather"]) 
+
+
+def _weather_service(db_session: Session) -> WeatherService:
+    """Create a request-scoped weather service."""
+
+    return WeatherService(db_session=db_session)
 
 
 def _get_weather_query_or_404(db_session: Session, weather_query_id: UUID) -> WeatherQuery:
@@ -50,16 +57,10 @@ def _normalize_query_datetime(value: datetime | None) -> datetime | None:
     return value.astimezone(UTC)
 
 
-@router.post("", response_model=WeatherQueryResponse, status_code=status.HTTP_201_CREATED)
-def create_weather_lookup(
-    payload: WeatherCreateRequest,
-    db_session: Session = Depends(get_db_session),
-) -> WeatherQuery:
-    service = WeatherService(db_session=db_session)
+def _raise_weather_api_error(exc: Exception) -> None:
+    """Translate known service/provider failures into API-shaped HTTP errors."""
 
-    try:
-        return service.create_weather_query(payload)
-    except ValueError as exc:
+    if isinstance(exc, ValueError):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail={
@@ -69,7 +70,8 @@ def create_weather_lookup(
                 }
             },
         ) from exc
-    except LocationNotFoundError as exc:
+
+    if isinstance(exc, LocationNotFoundError):
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail={
@@ -79,7 +81,8 @@ def create_weather_lookup(
                 }
             },
         ) from exc
-    except GeocodingProviderError as exc:
+
+    if isinstance(exc, GeocodingProviderError):
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail={
@@ -89,7 +92,8 @@ def create_weather_lookup(
                 }
             },
         ) from exc
-    except WeatherProviderError as exc:
+
+    if isinstance(exc, WeatherProviderError):
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail={
@@ -100,6 +104,26 @@ def create_weather_lookup(
             },
         ) from exc
 
+    raise exc
+
+
+@router.post("", response_model=WeatherQueryResponse, status_code=status.HTTP_201_CREATED)
+def create_weather_lookup(
+    payload: WeatherCreateRequest,
+    db_session: Session = Depends(get_db_session),
+) -> WeatherQuery:
+    service = _weather_service(db_session)
+
+    try:
+        return service.create_weather_query(payload)
+    except (
+        ValueError,
+        LocationNotFoundError,
+        GeocodingProviderError,
+        WeatherProviderError,
+    ) as exc:
+        _raise_weather_api_error(exc)
+
 
 @router.get("", response_model=list[WeatherQueryResponse])
 def list_weather_lookups(
@@ -107,10 +131,12 @@ def list_weather_lookups(
     mode: WeatherMode | None = None,
     start_datetime: datetime | None = Query(default=None, alias="startDateTime"),
     end_datetime: datetime | None = Query(default=None, alias="endDateTime"),
+    include: list[WeatherEnrichmentType] = Query(default_factory=list),
     db_session: Session = Depends(get_db_session),
 ) -> list[WeatherQuery]:
     start_datetime = _normalize_query_datetime(start_datetime)
     end_datetime = _normalize_query_datetime(end_datetime)
+    service = _weather_service(db_session)
 
     query = select(WeatherQuery).order_by(WeatherQuery.created_at.desc())
 
@@ -123,7 +149,10 @@ def list_weather_lookups(
     if end_datetime is not None:
         query = query.where(WeatherQuery.end_datetime == end_datetime)
 
-    return list(db_session.scalars(query))
+    return [
+        service.attach_enrichment(weather_query, include)
+        for weather_query in db_session.scalars(query)
+    ]
 
 
 @router.get("/export", response_model=None)
@@ -189,9 +218,12 @@ def export_weather_lookups(
 @router.get("/{weather_query_id}", response_model=WeatherQueryResponse)
 def get_weather_lookup(
     weather_query_id: UUID,
+    include: list[WeatherEnrichmentType] = Query(default_factory=list),
     db_session: Session = Depends(get_db_session),
 ) -> WeatherQuery:
-    return _get_weather_query_or_404(db_session, weather_query_id)
+    service = _weather_service(db_session)
+    weather_query = _get_weather_query_or_404(db_session, weather_query_id)
+    return service.attach_enrichment(weather_query, include)
 
 
 @router.patch("/{weather_query_id}", response_model=WeatherQueryResponse)
@@ -201,50 +233,17 @@ def update_weather_lookup(
     db_session: Session = Depends(get_db_session),
 ) -> WeatherQuery:
     weather_query = _get_weather_query_or_404(db_session, weather_query_id)
-    service = WeatherService(db_session=db_session)
+    service = _weather_service(db_session)
 
     try:
         return service.update_weather_query(weather_query, payload)
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail={
-                "error": {
-                    "code": "INVALID_WEATHER_LOOKUP",
-                    "message": str(exc),
-                }
-            },
-        ) from exc
-    except LocationNotFoundError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail={
-                "error": {
-                    "code": "LOCATION_NOT_FOUND",
-                    "message": str(exc),
-                }
-            },
-        ) from exc
-    except GeocodingProviderError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail={
-                "error": {
-                    "code": "GEOCODING_PROVIDER_ERROR",
-                    "message": "Failed to resolve the provided location.",
-                }
-            },
-        ) from exc
-    except WeatherProviderError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail={
-                "error": {
-                    "code": "WEATHER_PROVIDER_ERROR",
-                    "message": "Failed to retrieve weather data.",
-                }
-            },
-        ) from exc
+    except (
+        ValueError,
+        LocationNotFoundError,
+        GeocodingProviderError,
+        WeatherProviderError,
+    ) as exc:
+        _raise_weather_api_error(exc)
 
 
 @router.delete("/{weather_query_id}", status_code=status.HTTP_204_NO_CONTENT)

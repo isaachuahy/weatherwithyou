@@ -39,11 +39,55 @@ class WeatherUnits(StrEnum):
     IMPERIAL = "imperial"
 
 
+class WeatherEnrichmentType(StrEnum):
+    """Supported live enrichment types that can be requested alongside weather data."""
+
+    MAP = "map"
+    YOUTUBE = "youtube"
+    PUN = "pun"
+
+
 class WeatherData(BaseModel):
     """Application wrapper for stored provider payloads."""
 
     provider: str = Field(default="open-meteo")
     payload: dict[str, Any]
+
+
+class MapEnrichment(APIModel):
+    """Live Google Maps context for a resolved location."""
+
+    provider: str
+    embed_url: str
+    query: str
+    latitude: Decimal
+    longitude: Decimal
+
+
+class YouTubeVideoEnrichment(APIModel):
+    """Small YouTube video summary for location-based enrichment."""
+
+    provider: str
+    video_id: str
+    title: str
+    channel_title: str
+    thumbnail_url: str
+    embed_url: str
+
+
+class PunEnrichment(APIModel):
+    """Short LLM-generated pun tied to the resolved place and weather context."""
+
+    provider: str
+    text: str
+
+
+class WeatherEnrichment(APIModel):
+    """Optional live enrichment block returned alongside a saved weather lookup."""
+
+    map: MapEnrichment | None = None
+    youtube_videos: list[YouTubeVideoEnrichment] | None = None
+    pun: PunEnrichment | None = None
 
 
 def _ensure_timezone_aware(value: datetime | None, field_name: str) -> None:
@@ -64,6 +108,7 @@ class WeatherRequestBase(APIModel):
     start_datetime: datetime | None = None
     end_datetime: datetime | None = None
     units: WeatherUnits
+    include: list[WeatherEnrichmentType] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def validate_datetimes(self) -> "WeatherRequestBase":
@@ -99,6 +144,7 @@ class WeatherUpdateRequest(APIModel):
     start_datetime: datetime | None = None
     end_datetime: datetime | None = None
     units: WeatherUnits | None = None
+    include: list[WeatherEnrichmentType] | None = None
 
     @model_validator(mode="after")
     def validate_partial_datetimes(self) -> "WeatherUpdateRequest":
@@ -137,6 +183,7 @@ class WeatherQueryResponse(APIModel):
     end_datetime: datetime | None
     units: WeatherUnits
     weather_data: WeatherData
+    enrichment: WeatherEnrichment | None = None
     created_at: datetime
     updated_at: datetime
 

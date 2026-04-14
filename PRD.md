@@ -34,6 +34,7 @@ Build a simple backend weather app that:
 * persistence in PostgreSQL
 * CRUD on saved weather lookups
 * export as JSON and CSV
+* optional live response enrichment for map, YouTube videos, and a short LLM-generated pun
 * clean error handling
 
 ### Out of scope
@@ -42,7 +43,7 @@ Build a simple backend weather app that:
 * frontend
 * caching
 * microservices
-* YouTube integration for MVP
+* durable storage of map, YouTube, or pun enrichment
 
 ## CRUD interpretation
 
@@ -55,12 +56,13 @@ CRUD applies to saved weather lookup records.
 
 ## Core flow
 
-1. User submits `locationInput`, `mode`, optional `startDateTime`, optional `endDateTime`, `units`
+1. User submits `locationInput`, `mode`, optional `startDateTime`, optional `endDateTime`, `units`, and optional enrichment preferences
 2. Backend validates the request
 3. Backend geocodes the location using Nominatim
 4. Backend fetches weather from Open-Meteo
 5. Backend stores the lookup and returned weather data in PostgreSQL
-6. Backend returns the saved record
+6. Backend may fetch optional live enrichment tied to the resolved location
+7. Backend returns the saved record
 
 ## Database design
 
@@ -80,6 +82,8 @@ Use one table for simplicity.
 * `weather_data` JSONB not null
 * `created_at` timestamptz default now()
 * `updated_at` timestamptz default now()
+
+Optional enrichment should not be added to the durable weather table by default.
 
 ## Persistence rules
 
@@ -102,7 +106,8 @@ Request body:
   "mode": "historical",
   "startDateTime": "2017-04-03T09:00:00-04:00",
   "endDateTime": "2017-04-03T18:00:00-04:00",
-  "units": "metric"
+  "units": "metric",
+  "include": ["map", "youtube", "pun"]
 }
 ```
 
@@ -112,6 +117,7 @@ Behavior:
 * geocode location
 * fetch weather
 * save row
+* optionally fetch live enrichment for the resolved location
 * return saved record
 
 Mode rules:
@@ -131,10 +137,12 @@ Optional query params:
 * `mode`
 * `startDateTime`
 * `endDateTime`
+* optional `include`
 
 Response behavior:
 
 * return full saved records, including full `weather_data`, for MVP simplicity
+* if `include` is requested, enrich the response live without mutating the persisted weather row
 
 ### `GET /weather/{id}`
 
@@ -149,6 +157,7 @@ Allowed fields:
 * `startDateTime`
 * `endDateTime`
 * `units`
+* optional `include`
 
 Behavior:
 
@@ -156,6 +165,7 @@ Behavior:
 * re-geocode if location changed
 * re-fetch weather
 * replace stored weather data
+* optionally fetch live enrichment for the updated resolved location
 
 ### `DELETE /weather/{id}`
 
@@ -199,6 +209,23 @@ Allowed values:
 * `metric`
 * `imperial`
 
+### Enrichment
+
+Allowed values for `include`:
+
+* `map`
+* `youtube`
+* `pun`
+
+Rules:
+
+* enrichment is optional
+* enrichment should be fetched live at request time
+* enrichment failures should not block weather persistence
+* enrichment should not replace canonical weather fields
+* enrichment should remain lightweight and weather-adjacent rather than turning the product into a city guide
+* `pun` should be generated from a lightweight prompt using the resolved location and weather context
+
 ## Error handling
 
 Do not expose raw provider/internal errors directly to the user.
@@ -216,7 +243,7 @@ Return controlled API errors like:
 
 Examples:
 
-* invalid input → 400
+* invalid input → 422
 * lookup not found → 404
 * location not found → 422
 * external API failure → 502
@@ -233,6 +260,7 @@ Examples:
 * use a stable API response wrapper while preserving relatively unprocessed provider data inside `weather_data`
 * use the first valid Nominatim match for MVP and store its display name as `normalized_location`
 * store hourly lookup windows as timezone-aware datetimes, not dates
+* treat maps, YouTube videos, and puns as live response enrichment instead of durable weather data
 
 ## Response shape
 
@@ -255,6 +283,29 @@ Example shape:
     "provider": "open-meteo",
     "payload": {}
   },
+  "enrichment": {
+    "map": {
+      "provider": "google-maps",
+      "embedUrl": "https://www.google.com/maps/embed/v1/place?...",
+      "query": "London, Southwestern Ontario, Ontario, Canada",
+      "latitude": 42.98339,
+      "longitude": -81.23304
+    },
+    "youtubeVideos": [
+      {
+        "provider": "youtube",
+        "videoId": "abc123",
+        "title": "Walking around London, Ontario",
+        "channelTitle": "Example Channel",
+        "thumbnailUrl": "https://i.ytimg.com/vi/abc123/hqdefault.jpg",
+        "embedUrl": "https://www.youtube.com/embed/abc123"
+      }
+    ],
+    "pun": {
+      "provider": "gemini-flash",
+      "text": "London’s forecast is so bright, it’s practically a royal-tea of sunshine."
+    }
+  },
   "createdAt": "timestamp",
   "updatedAt": "timestamp"
 }
@@ -264,12 +315,15 @@ Notes:
 
 * response fields should remain stable even if provider payloads evolve
 * `weatherData` should preserve provider data with minimal transformation for MVP
+* `enrichment` should be optional and safe to omit
+* `enrichment` should be fetched live rather than persisted by default
 
 ## Export shape
 
 * JSON export should return saved records in the same stable wrapper shape used by the API
 * CSV export should use flat metadata columns and serialize `weather_data` as JSON text in a single column
 * CSV metadata columns should use `start_datetime` and `end_datetime`
+* live enrichment should be excluded from exports by default
 
 ## Acceptance criteria
 
@@ -279,4 +333,5 @@ Notes:
 * backend supports hourly weather windows for historical and forecast lookups
 * saved records can be read, updated, and deleted
 * export works in JSON and CSV
+* optional map, YouTube, and pun enrichment can be returned live for a resolved location without changing the persisted weather row
 * errors are handled cleanly

@@ -9,9 +9,12 @@ The API supports:
 * current weather lookups by location
 * historical and forecast weather lookups by location plus datetime window
 * hourly weather data for historical and forecast modes
+* optional live response enrichment for map data, YouTube videos, and a short LLM-generated pun via `include`
 
 `current` mode does not use `startDateTime` or `endDateTime`. Historical and forecast modes do.
 Datetime inputs must be timezone-aware, and stored lookup windows are normalized to UTC.
+Optional enrichment is live-only and is not persisted as part of the saved weather row by default.
+Enrichment requires the relevant Google Maps, YouTube, and Gemini settings in `.env`.
 
 ## Quickstart
 
@@ -81,4 +84,4 @@ Apply the latest migration:
 alembic upgrade head
 ```
 
-Out of scope for this MVP: authentication, RBAC, caching, microservices, and multi-user data ownership.
+Out of scope for this MVP: authentication, RBAC, caching, microservices, multi-user data ownership, and durable storage of enrichment data.

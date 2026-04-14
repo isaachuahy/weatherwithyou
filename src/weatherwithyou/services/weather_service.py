@@ -2,11 +2,16 @@ from datetime import UTC, datetime
 
 from sqlalchemy.orm import Session
 
+from weatherwithyou.clients.google_maps import GoogleMapsClient
 from weatherwithyou.clients.geocoding import NominatimClient
+from weatherwithyou.clients.pun import PunClient, PunProviderError
 from weatherwithyou.clients.weather_client import OpenMeteoClient
+from weatherwithyou.clients.youtube import YouTubeClient, YouTubeProviderError
 from weatherwithyou.models.weather_query import WeatherQuery
 from weatherwithyou.schemas.weather_schemas import (
     WeatherCreateRequest,
+    WeatherEnrichment,
+    WeatherEnrichmentType,
     WeatherMode,
     WeatherUpdateRequest,
 )
@@ -20,10 +25,16 @@ class WeatherService:
         db_session: Session,
         geocoding_client: NominatimClient | None = None,
         weather_client: OpenMeteoClient | None = None,
+        google_maps_client: GoogleMapsClient | None = None,
+        youtube_client: YouTubeClient | None = None,
+        pun_client: PunClient | None = None,
     ) -> None:
         self.db_session = db_session
         self.geocoding_client = geocoding_client or NominatimClient()
         self.weather_client = weather_client or OpenMeteoClient()
+        self.google_maps_client = google_maps_client or GoogleMapsClient()
+        self.youtube_client = youtube_client or YouTubeClient()
+        self.pun_client = pun_client or PunClient()
 
     def _validate_mode_datetimes(
         self,
@@ -52,6 +63,69 @@ class WeatherService:
             return None
 
         return value.astimezone(UTC)
+
+    def _build_enrichment(
+        self,
+        *,
+        weather_query: WeatherQuery,
+        include: list[WeatherEnrichmentType],
+    ) -> WeatherEnrichment | None:
+        """Assemble optional live enrichment without mutating the stored weather row."""
+
+        if not include:
+            return None
+
+        requested = set(include)
+        enrichment = WeatherEnrichment()
+
+        if WeatherEnrichmentType.MAP in requested:
+            enrichment.map = self.google_maps_client.build_place_embed(
+                normalized_location=weather_query.normalized_location,
+                latitude=weather_query.latitude,
+                longitude=weather_query.longitude,
+            )
+
+        if WeatherEnrichmentType.YOUTUBE in requested:
+            try:
+                enrichment.youtube_videos = self.youtube_client.search_location_videos(
+                    normalized_location=weather_query.normalized_location,
+                )
+            except YouTubeProviderError:
+                enrichment.youtube_videos = None
+
+        if WeatherEnrichmentType.PUN in requested:
+            try:
+                enrichment.pun = self.pun_client.generate_pun(
+                    normalized_location=weather_query.normalized_location,
+                    weather_payload=weather_query.weather_data.get("payload", {}),
+                )
+            except PunProviderError:
+                enrichment.pun = None
+
+        if not any(
+            [
+                enrichment.map,
+                enrichment.youtube_videos,
+                enrichment.pun,
+            ]
+        ):
+            return None
+
+        return enrichment
+
+    def attach_enrichment(
+        self,
+        weather_query: WeatherQuery,
+        include: list[WeatherEnrichmentType],
+    ) -> WeatherQuery:
+        """Attach live-only enrichment to a saved weather lookup for response serialization."""
+
+        setattr(
+            weather_query,
+            "enrichment",
+            self._build_enrichment(weather_query=weather_query, include=include),
+        )
+        return weather_query
 
     def create_weather_query(self, payload: WeatherCreateRequest) -> WeatherQuery:
         """Create and persist a new weather lookup record from a validated request."""
@@ -93,7 +167,7 @@ class WeatherService:
         self.db_session.add(weather_query)
         self.db_session.commit()
         self.db_session.refresh(weather_query)
-        return weather_query
+        return self.attach_enrichment(weather_query, payload.include)
 
     def update_weather_query(
         self,
@@ -160,4 +234,4 @@ class WeatherService:
         self.db_session.add(weather_query)
         self.db_session.commit()
         self.db_session.refresh(weather_query)
-        return weather_query
+        return self.attach_enrichment(weather_query, payload.include or [])

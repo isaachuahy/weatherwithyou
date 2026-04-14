@@ -8,6 +8,7 @@ from weatherwithyou.clients.geocoding import ResolvedLocation
 from weatherwithyou.models.weather_query import WeatherQuery
 from weatherwithyou.schemas.weather_schemas import (
     WeatherCreateRequest,
+    WeatherEnrichmentType,
     WeatherMode,
     WeatherUnits,
     WeatherUpdateRequest,
@@ -278,3 +279,76 @@ def test_update_weather_query_rejects_current_mode_when_existing_dates_are_kept(
     weather_client.fetch_weather.assert_not_called()
     db_session.add.assert_not_called()
     db_session.commit.assert_not_called()
+
+
+def test_create_weather_query_attaches_requested_live_enrichment() -> None:
+    db_session = Mock()
+    geocoding_client = Mock()
+    weather_client = Mock()
+    google_maps_client = Mock()
+    youtube_client = Mock()
+    pun_client = Mock()
+
+    geocoding_client.geocode.return_value = ResolvedLocation(
+        normalized_location="London, Southwestern Ontario, Ontario, Canada",
+        latitude=Decimal("42.983675"),
+        longitude=Decimal("-81.249607"),
+    )
+    weather_client.fetch_weather.return_value = {
+        "current": {"temperature_2m": 21.2},
+    }
+    google_maps_client.build_place_embed.return_value = {
+        "provider": "google-maps",
+        "embedUrl": "https://www.google.com/maps/embed/v1/place?key=test&q=London",
+        "query": "London, Southwestern Ontario, Ontario, Canada",
+        "latitude": Decimal("42.983675"),
+        "longitude": Decimal("-81.249607"),
+    }
+    youtube_client.search_location_videos.return_value = [
+        {
+            "provider": "youtube",
+            "videoId": "abc123",
+            "title": "Walking around London, Ontario",
+            "channelTitle": "Example Channel",
+            "thumbnailUrl": "https://i.ytimg.com/vi/abc123/hqdefault.jpg",
+            "embedUrl": "https://www.youtube.com/embed/abc123",
+        }
+    ]
+    pun_client.generate_pun.return_value = {
+        "provider": "gemini-flash",
+        "text": "London’s forecast is looking reigneously bright.",
+    }
+
+    service = WeatherService(
+        db_session=db_session,
+        geocoding_client=geocoding_client,
+        weather_client=weather_client,
+        google_maps_client=google_maps_client,
+        youtube_client=youtube_client,
+        pun_client=pun_client,
+    )
+    payload = WeatherCreateRequest(
+        locationInput="London, Ontario, Canada",
+        mode=WeatherMode.CURRENT,
+        units=WeatherUnits.METRIC,
+        include=[
+            WeatherEnrichmentType.MAP,
+            WeatherEnrichmentType.YOUTUBE,
+            WeatherEnrichmentType.PUN,
+        ],
+    )
+
+    result = service.create_weather_query(payload)
+
+    assert result.enrichment is not None
+    assert result.enrichment.map is not None
+    assert result.enrichment.youtube_videos is not None
+    assert result.enrichment.pun is not None
+    google_maps_client.build_place_embed.assert_called_once()
+    youtube_client.search_location_videos.assert_called_once_with(
+        normalized_location="London, Southwestern Ontario, Ontario, Canada",
+    )
+    pun_client.generate_pun.assert_called_once_with(
+        normalized_location="London, Southwestern Ontario, Ontario, Canada",
+        weather_payload={"current": {"temperature_2m": 21.2}},
+    )
