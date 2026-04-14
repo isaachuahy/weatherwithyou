@@ -1,9 +1,15 @@
+from datetime import UTC, datetime
+
 from sqlalchemy.orm import Session
 
 from weatherwithyou.clients.geocoding import NominatimClient
 from weatherwithyou.clients.weather_client import OpenMeteoClient
 from weatherwithyou.models.weather_query import WeatherQuery
-from weatherwithyou.schemas.weather_schemas import WeatherCreateRequest, WeatherUpdateRequest
+from weatherwithyou.schemas.weather_schemas import (
+    WeatherCreateRequest,
+    WeatherMode,
+    WeatherUpdateRequest,
+)
 
 
 class WeatherService:
@@ -12,23 +18,60 @@ class WeatherService:
     def __init__(
         self,
         db_session: Session,
-        geocoding_client: NominatimClient | None = None, # Allowing clients to be injected for easier testing and future extensibility (e.g. multiple providers).
-        weather_client: OpenMeteoClient | None = None, # In a more complex application, we might have provider selection logic here instead of hardcoding a single client.
+        geocoding_client: NominatimClient | None = None,
+        weather_client: OpenMeteoClient | None = None,
     ) -> None:
         self.db_session = db_session
         self.geocoding_client = geocoding_client or NominatimClient()
-        self.weather_client = weather_client or OpenMeteoClient() # For the MVP, we're directly using the Open-Meteo client, but this could be extended to support multiple providers with selection logic based on factors like availability, performance, or user preference.
+        self.weather_client = weather_client or OpenMeteoClient()
+
+    def _validate_mode_datetimes(
+        self,
+        *,
+        mode: WeatherMode,
+        start_datetime: datetime | None,
+        end_datetime: datetime | None,
+    ) -> None:
+        """Validate the final merged mode/datetime state before external calls or persistence."""
+
+        if mode == WeatherMode.CURRENT:
+            if start_datetime is not None or end_datetime is not None:
+                raise ValueError("current mode does not accept startDateTime or endDateTime.")
+            return
+
+        if start_datetime is None or end_datetime is None:
+            raise ValueError("startDateTime and endDateTime are required for this mode.")
+
+        if start_datetime > end_datetime:
+            raise ValueError("startDateTime must be less than or equal to endDateTime.")
+
+    def _to_utc(self, value: datetime | None) -> datetime | None:
+        """Normalize timezone-aware datetimes to UTC before persistence or provider use."""
+
+        if value is None:
+            return None
+
+        return value.astimezone(UTC)
 
     def create_weather_query(self, payload: WeatherCreateRequest) -> WeatherQuery:
         """Create and persist a new weather lookup record from a validated request."""
+
+        start_datetime = self._to_utc(payload.start_datetime)
+        end_datetime = self._to_utc(payload.end_datetime)
+
+        self._validate_mode_datetimes(
+            mode=payload.mode,
+            start_datetime=start_datetime,
+            end_datetime=end_datetime,
+        )
 
         resolved_location = self.geocoding_client.geocode(payload.location_input)
         weather_payload = self.weather_client.fetch_weather(
             latitude=resolved_location.latitude,
             longitude=resolved_location.longitude,
             mode=payload.mode,
-            start_date=payload.start_date,
-            end_date=payload.end_date,
+            start_datetime=start_datetime,
+            end_datetime=end_datetime,
             units=payload.units,
         )
 
@@ -38,8 +81,8 @@ class WeatherService:
             latitude=resolved_location.latitude,
             longitude=resolved_location.longitude,
             mode=payload.mode,
-            start_date=payload.start_date,
-            end_date=payload.end_date,
+            start_datetime=start_datetime,
+            end_datetime=end_datetime,
             units=payload.units,
             weather_data={
                 "provider": "open-meteo",
@@ -59,11 +102,34 @@ class WeatherService:
     ) -> WeatherQuery:
         """Update an existing weather lookup and refresh its stored weather data."""
 
-        location_input = payload.location_input or weather_query.location_input
-        mode = payload.mode or weather_query.mode
-        start_date = payload.start_date or weather_query.start_date
-        end_date = payload.end_date or weather_query.end_date
-        units = payload.units or weather_query.units
+        provided_fields = payload.model_fields_set
+
+        location_input = (
+            payload.location_input
+            if "location_input" in provided_fields
+            else weather_query.location_input
+        )
+        mode = payload.mode if "mode" in provided_fields else weather_query.mode
+        start_datetime = (
+            payload.start_datetime
+            if "start_datetime" in provided_fields
+            else weather_query.start_datetime
+        )
+        end_datetime = (
+            payload.end_datetime
+            if "end_datetime" in provided_fields
+            else weather_query.end_datetime
+        )
+        units = payload.units if "units" in provided_fields else weather_query.units
+
+        start_datetime = self._to_utc(start_datetime)
+        end_datetime = self._to_utc(end_datetime)
+
+        self._validate_mode_datetimes(
+            mode=mode,
+            start_datetime=start_datetime,
+            end_datetime=end_datetime,
+        )
 
         location_changed = location_input != weather_query.location_input
         if location_changed:
@@ -76,15 +142,15 @@ class WeatherService:
             latitude=weather_query.latitude,
             longitude=weather_query.longitude,
             mode=mode,
-            start_date=start_date,
-            end_date=end_date,
+            start_datetime=start_datetime,
+            end_datetime=end_datetime,
             units=units,
         )
 
         weather_query.location_input = location_input
         weather_query.mode = mode
-        weather_query.start_date = start_date
-        weather_query.end_date = end_date
+        weather_query.start_datetime = start_datetime
+        weather_query.end_datetime = end_datetime
         weather_query.units = units
         weather_query.weather_data = {
             "provider": "open-meteo",

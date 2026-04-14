@@ -1,25 +1,27 @@
-from datetime import date
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import httpx
 
 from weatherwithyou.schemas.weather_schemas import WeatherMode, WeatherUnits
 from weatherwithyou.settings import get_settings
 
-# We can choose to define the specific variables we want to fetch from the provider for each mode, 
-# which can help optimize the request and ensure consistent data structure in our application. 
-# For simplicity, we're fetching all daily variables for historical and forecast modes, but in a more complex application we might want to allow users to specify which variables they're interested in or implement some logic to determine that based on the mode and use case.
-DAILY_VARIABLES = [
+HOURLY_VARIABLES = [
+    "temperature_2m",
+    "relative_humidity_2m",
+    "apparent_temperature",
+    "precipitation",
+    "rain",
+    "snowfall",
     "weather_code",
-    "temperature_2m_max",
-    "temperature_2m_min",
-    "apparent_temperature_max",
-    "apparent_temperature_min",
-    "precipitation_sum",
-    "rain_sum",
-    "snowfall_sum",
-    "precipitation_hours",
+    "cloud_cover",
+    "pressure_msl",
+    "surface_pressure",
+    "wind_speed_10m",
+    "wind_direction_10m",
+    "wind_gusts_10m",
 ]
 
 CURRENT_VARIABLES = [
@@ -33,7 +35,7 @@ CURRENT_VARIABLES = [
     "snowfall",
     "weather_code",
     "cloud_cover",
-    "sea_level_pressure",
+    "pressure_msl",
     "surface_pressure",
     "wind_speed_10m",
     "wind_direction_10m",
@@ -60,8 +62,8 @@ class OpenMeteoClient:
         latitude: Decimal,
         longitude: Decimal,
         mode: WeatherMode,
-        start_date: date,
-        end_date: date,
+        start_datetime: datetime | None,
+        end_datetime: datetime | None,
         units: WeatherUnits,
     ) -> dict[str, Any]:
         """Fetch weather data from the matching Open-Meteo endpoint for the requested mode."""
@@ -71,22 +73,27 @@ class OpenMeteoClient:
             latitude=latitude,
             longitude=longitude,
             mode=mode,
-            start_date=start_date,
-            end_date=end_date,
+            start_datetime=start_datetime,
+            end_datetime=end_datetime,
             units=units,
         )
 
         try:
-            # Using httpx.Client here to take advantage of connection pooling and other optimizations for multiple requests to the same provider.
             with httpx.Client(base_url=base_url, timeout=self.timeout) as client:
                 response = client.get("/forecast" if mode != WeatherMode.HISTORICAL else "/archive", params=params)
-                # Open-Meteo returns 200 with an error message in the body for some error cases (e.g. invalid coordinates), 
-                # so we need to check for that as well.
                 response.raise_for_status()
         except httpx.HTTPError as exc:
             raise WeatherProviderError("Weather provider request failed.") from exc
 
-        return response.json()
+        payload = response.json()
+        if mode == WeatherMode.CURRENT:
+            return payload
+
+        return self._filter_hourly_window(
+            payload=payload,
+            start_datetime=start_datetime,
+            end_datetime=end_datetime,
+        )
 
     def _build_params(
         self,
@@ -94,11 +101,11 @@ class OpenMeteoClient:
         latitude: Decimal,
         longitude: Decimal,
         mode: WeatherMode,
-        start_date: date,
-        end_date: date,
+        start_datetime: datetime | None,
+        end_datetime: datetime | None,
         units: WeatherUnits,
     ) -> dict[str, Any]:
-        """Helper method to build the provider request parameters for a weather lookup."""
+        """Build provider request parameters for a weather lookup."""
 
         params: dict[str, Any] = {
             "latitude": float(latitude),
@@ -106,17 +113,74 @@ class OpenMeteoClient:
             "temperature_unit": self._temperature_unit(units),
             "wind_speed_unit": self._wind_speed_unit(units),
             "precipitation_unit": self._precipitation_unit(units),
-            "timezone": "auto",
+            "timezone": "GMT",
         }
 
         if mode == WeatherMode.CURRENT:
             params["current"] = ",".join(CURRENT_VARIABLES)
             return params
 
-        params["start_date"] = start_date.isoformat() 
-        params["end_date"] = end_date.isoformat()
-        params["daily"] = ",".join(DAILY_VARIABLES) # Fetching all daily variables for simplicity
+        if start_datetime is None or end_datetime is None:
+            raise ValueError("startDateTime and endDateTime are required for this mode.")
+
+        params["hourly"] = ",".join(HOURLY_VARIABLES)
+
+        if mode == WeatherMode.HISTORICAL:
+            params["start_date"] = start_datetime.astimezone(timezone.utc).date().isoformat()
+            params["end_date"] = end_datetime.astimezone(timezone.utc).date().isoformat()
+            return params
+
+        params["start_hour"] = self._to_provider_hour(start_datetime)
+        params["end_hour"] = self._to_provider_hour(end_datetime)
         return params
+
+    def _filter_hourly_window(
+        self,
+        *,
+        payload: dict[str, Any],
+        start_datetime: datetime | None,
+        end_datetime: datetime | None,
+    ) -> dict[str, Any]:
+        """Trim hourly payloads to the exact requested datetime window."""
+
+        if start_datetime is None or end_datetime is None:
+            return payload
+
+        hourly = payload.get("hourly")
+        if not isinstance(hourly, dict):
+            return payload
+
+        time_values = hourly.get("time")
+        if not isinstance(time_values, list):
+            return payload
+
+        timezone_name = payload.get("timezone", "GMT")
+        provider_timezone = ZoneInfo("UTC") if timezone_name == "GMT" else ZoneInfo(timezone_name)
+        start_utc = start_datetime.astimezone(timezone.utc)
+        end_utc = end_datetime.astimezone(timezone.utc)
+
+        keep_indexes = [
+            index
+            for index, value in enumerate(time_values)
+            if start_utc
+            <= datetime.fromisoformat(value).replace(tzinfo=provider_timezone).astimezone(timezone.utc)
+            <= end_utc
+        ]
+
+        filtered_hourly: dict[str, Any] = {}
+        for key, values in hourly.items():
+            if isinstance(values, list):
+                filtered_hourly[key] = [values[index] for index in keep_indexes]
+            else:
+                filtered_hourly[key] = values
+
+        payload["hourly"] = filtered_hourly
+        return payload
+
+    def _to_provider_hour(self, value: datetime) -> str:
+        """Convert a timezone-aware datetime to the provider's UTC hour format."""
+
+        return value.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M")
 
     def _temperature_unit(self, units: WeatherUnits) -> str:
         return "fahrenheit" if units == WeatherUnits.IMPERIAL else "celsius"

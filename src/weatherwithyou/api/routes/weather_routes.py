@@ -1,5 +1,6 @@
 import csv
 import json
+from datetime import UTC, datetime
 from io import StringIO
 from uuid import UUID
 
@@ -40,10 +41,13 @@ def _get_weather_query_or_404(db_session: Session, weather_query_id: UUID) -> We
     return weather_query
 
 
-def _service_for(db_session: Session) -> WeatherService:
-    """Create a request-scoped weather service."""
+def _normalize_query_datetime(value: datetime | None) -> datetime | None:
+    """Normalize API datetime filters to UTC before comparing against stored rows."""
 
-    return WeatherService(db_session=db_session)
+    if value is None:
+        return None
+
+    return value.astimezone(UTC)
 
 
 @router.post("", response_model=WeatherQueryResponse, status_code=status.HTTP_201_CREATED)
@@ -51,10 +55,20 @@ def create_weather_lookup(
     payload: WeatherCreateRequest,
     db_session: Session = Depends(get_db_session),
 ) -> WeatherQuery:
-    service = _service_for(db_session)
+    service = WeatherService(db_session=db_session)
 
     try:
         return service.create_weather_query(payload)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={
+                "error": {
+                    "code": "INVALID_WEATHER_LOOKUP",
+                    "message": str(exc),
+                }
+            },
+        ) from exc
     except LocationNotFoundError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -91,20 +105,23 @@ def create_weather_lookup(
 def list_weather_lookups(
     location: str | None = None,
     mode: WeatherMode | None = None,
-    start_date: str | None = Query(default=None, alias="startDate"),
-    end_date: str | None = Query(default=None, alias="endDate"),
+    start_datetime: datetime | None = Query(default=None, alias="startDateTime"),
+    end_datetime: datetime | None = Query(default=None, alias="endDateTime"),
     db_session: Session = Depends(get_db_session),
 ) -> list[WeatherQuery]:
+    start_datetime = _normalize_query_datetime(start_datetime)
+    end_datetime = _normalize_query_datetime(end_datetime)
+
     query = select(WeatherQuery).order_by(WeatherQuery.created_at.desc())
 
     if location:
         query = query.where(WeatherQuery.location_input.ilike(f"%{location}%"))
     if mode:
         query = query.where(WeatherQuery.mode == mode)
-    if start_date:
-        query = query.where(WeatherQuery.start_date == start_date)
-    if end_date:
-        query = query.where(WeatherQuery.end_date == end_date)
+    if start_datetime is not None:
+        query = query.where(WeatherQuery.start_datetime == start_datetime)
+    if end_datetime is not None:
+        query = query.where(WeatherQuery.end_datetime == end_datetime)
 
     return list(db_session.scalars(query))
 
@@ -134,8 +151,8 @@ def export_weather_lookups(
             "latitude",
             "longitude",
             "mode",
-            "start_date",
-            "end_date",
+            "start_datetime",
+            "end_datetime",
             "units",
             "weather_data",
             "created_at",
@@ -153,8 +170,8 @@ def export_weather_lookups(
                 "latitude": weather_query.latitude,
                 "longitude": weather_query.longitude,
                 "mode": weather_query.mode,
-                "start_date": weather_query.start_date,
-                "end_date": weather_query.end_date,
+                "start_datetime": weather_query.start_datetime,
+                "end_datetime": weather_query.end_datetime,
                 "units": weather_query.units,
                 "weather_data": json.dumps(weather_query.weather_data),
                 "created_at": weather_query.created_at,
@@ -184,13 +201,23 @@ def update_weather_lookup(
     db_session: Session = Depends(get_db_session),
 ) -> WeatherQuery:
     weather_query = _get_weather_query_or_404(db_session, weather_query_id)
-    service = _service_for(db_session)
+    service = WeatherService(db_session=db_session)
 
     try:
         return service.update_weather_query(weather_query, payload)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail={
+                "error": {
+                    "code": "INVALID_WEATHER_LOOKUP",
+                    "message": str(exc),
+                }
+            },
+        ) from exc
     except LocationNotFoundError as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, # 422 is appropriate here since the client provided a location that doesn't exist, which is a validation issue with the input rather than a server error.
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail={
                 "error": {
                     "code": "LOCATION_NOT_FOUND",
@@ -200,7 +227,7 @@ def update_weather_lookup(
         ) from exc
     except GeocodingProviderError as exc:
         raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY, # 502 is appropriate here since the error occurred while trying to communicate with an external geocoding provider, which is a server-side issue outside of the client's control.
+            status_code=status.HTTP_502_BAD_GATEWAY,
             detail={
                 "error": {
                     "code": "GEOCODING_PROVIDER_ERROR",

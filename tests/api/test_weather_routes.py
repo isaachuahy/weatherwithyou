@@ -1,4 +1,4 @@
-from datetime import date, datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 from unittest.mock import Mock, patch
 from uuid import uuid4
@@ -20,12 +20,12 @@ def _sample_weather_query() -> WeatherQuery:
         latitude=Decimal("42.983390"),
         longitude=Decimal("-81.233040"),
         mode=WeatherMode.HISTORICAL,
-        start_date=date(2024, 4, 1),
-        end_date=date(2024, 4, 2),
+        start_datetime=datetime(2024, 4, 1, 9, 0, tzinfo=UTC),
+        end_datetime=datetime(2024, 4, 1, 18, 0, tzinfo=UTC),
         units=WeatherUnits.METRIC,
-        weather_data={"provider": "open-meteo", "payload": {"daily": {}}},
-        created_at=datetime(2024, 4, 1, 12, 0, tzinfo=timezone.utc),
-        updated_at=datetime(2024, 4, 1, 12, 0, tzinfo=timezone.utc),
+        weather_data={"provider": "open-meteo", "payload": {"hourly": {}}},
+        created_at=datetime(2024, 4, 1, 12, 0, tzinfo=UTC),
+        updated_at=datetime(2024, 4, 1, 12, 0, tzinfo=UTC),
     )
 
 
@@ -53,8 +53,8 @@ def test_create_weather_lookup_returns_created_record() -> None:
             json={
                 "locationInput": "London, Ontario, Canada",
                 "mode": "historical",
-                "startDate": "2024-04-01",
-                "endDate": "2024-04-02",
+                "startDateTime": "2024-04-01T09:00:00Z",
+                "endDateTime": "2024-04-01T18:00:00Z",
                 "units": "metric",
             },
         )
@@ -65,6 +65,8 @@ def test_create_weather_lookup_returns_created_record() -> None:
     body = response.json()
     assert body["locationInput"] == "London, Ontario, Canada"
     assert body["mode"] == "historical"
+    assert body["startDateTime"] == "2024-04-01T09:00:00Z"
+    assert body["endDateTime"] == "2024-04-01T18:00:00Z"
     assert body["weatherData"]["provider"] == "open-meteo"
     create_weather_query.assert_called_once()
 
@@ -83,8 +85,8 @@ def test_create_weather_lookup_returns_422_for_missing_location_match() -> None:
             json={
                 "locationInput": "Unknown Place",
                 "mode": "historical",
-                "startDate": "2024-04-01",
-                "endDate": "2024-04-02",
+                "startDateTime": "2024-04-01T09:00:00Z",
+                "endDateTime": "2024-04-01T18:00:00Z",
                 "units": "metric",
             },
         )
@@ -138,3 +140,92 @@ def test_delete_weather_lookup_returns_204() -> None:
     assert response.content == b""
     mock_session.delete.assert_called_once_with(weather_query)
     mock_session.commit.assert_called_once()
+
+
+def test_update_weather_lookup_returns_422_for_invalid_merged_state() -> None:
+    mock_session = Mock()
+    weather_query = _sample_weather_query()
+    mock_session.get.return_value = weather_query
+    app.dependency_overrides[get_db_session] = lambda: mock_session
+
+    with patch(
+        "weatherwithyou.api.routes.weather_routes.WeatherService.update_weather_query",
+        side_effect=ValueError("current mode does not accept startDateTime or endDateTime."),
+    ):
+        client = TestClient(app)
+        response = client.patch(
+            f"/weather/{weather_query.id}",
+            json={"mode": "current"},
+        )
+
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 422
+    assert response.json() == {
+        "detail": {
+            "error": {
+                "code": "INVALID_WEATHER_LOOKUP",
+                "message": "current mode does not accept startDateTime or endDateTime.",
+            }
+        }
+    }
+
+
+def test_list_weather_lookups_normalizes_datetime_filters_to_utc() -> None:
+    mock_session = Mock()
+    weather_query = _sample_weather_query()
+    mock_session.scalars.return_value = [weather_query]
+    app.dependency_overrides[get_db_session] = lambda: mock_session
+    client = TestClient(app)
+
+    response = client.get(
+        "/weather",
+        params={
+            "startDateTime": "2024-04-01T05:00:00-04:00",
+            "endDateTime": "2024-04-01T14:00:00-04:00",
+        },
+    )
+
+    app.dependency_overrides.clear()
+
+    query = mock_session.scalars.call_args.args[0]
+    filter_values = [criterion.right.value for criterion in query._where_criteria]
+
+    assert response.status_code == 200
+    assert response.json()[0]["id"] == str(weather_query.id)
+    assert datetime(2024, 4, 1, 9, 0, tzinfo=UTC) in filter_values
+    assert datetime(2024, 4, 1, 18, 0, tzinfo=UTC) in filter_values
+
+
+def test_export_weather_lookups_returns_json_records() -> None:
+    mock_session = Mock()
+    weather_query = _sample_weather_query()
+    mock_session.scalars.return_value = [weather_query]
+    app.dependency_overrides[get_db_session] = lambda: mock_session
+    client = TestClient(app)
+
+    response = client.get("/weather/export")
+
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.json()[0]["startDateTime"] == "2024-04-01T09:00:00Z"
+    assert response.json()[0]["endDateTime"] == "2024-04-01T18:00:00Z"
+
+
+def test_export_weather_lookups_returns_csv_rows() -> None:
+    mock_session = Mock()
+    weather_query = _sample_weather_query()
+    mock_session.scalars.return_value = [weather_query]
+    app.dependency_overrides[get_db_session] = lambda: mock_session
+    client = TestClient(app)
+
+    response = client.get("/weather/export?format=csv")
+
+    app.dependency_overrides.clear()
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/csv")
+    assert "attachment; filename=\"weather-lookups.csv\"" == response.headers["content-disposition"]
+    assert "start_datetime,end_datetime" in response.text
+    assert "2024-04-01 09:00:00+00:00" in response.text

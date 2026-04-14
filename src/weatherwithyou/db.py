@@ -17,6 +17,7 @@ engine: Engine = create_engine(
     settings.database_url,
     echo=settings.debug,
     pool_pre_ping=True,
+    connect_args={"options": "-c timezone=UTC"},
 )
 
 SessionLocal = sessionmaker(

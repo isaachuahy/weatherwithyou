@@ -1,9 +1,9 @@
-from datetime import date, datetime
+from datetime import datetime
 from decimal import Decimal
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import Date, DateTime, Numeric, String, func
+from sqlalchemy import DateTime, Numeric, String, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -23,8 +23,8 @@ class WeatherQuery(Base):
     latitude: Mapped[Decimal] = mapped_column(Numeric(9, 6), nullable=False)
     longitude: Mapped[Decimal] = mapped_column(Numeric(9, 6), nullable=False)
     mode: Mapped[str] = mapped_column(String(20), nullable=False)
-    start_date: Mapped[date] = mapped_column(Date, nullable=False)
-    end_date: Mapped[date] = mapped_column(Date, nullable=False)
+    start_datetime: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    end_datetime: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     units: Mapped[str] = mapped_column(String(20), nullable=False)
     weather_data: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
     created_at: Mapped[datetime] = mapped_column(

@@ -4,6 +4,15 @@ Backend weather API built with FastAPI, SQLAlchemy, and PostgreSQL.
 
 Single-user MVP for now. Saved lookups are durable, but there is no authentication, user ownership, or multi-user partitioning yet.
 
+The API supports:
+
+* current weather lookups by location
+* historical and forecast weather lookups by location plus datetime window
+* hourly weather data for historical and forecast modes
+
+`current` mode does not use `startDateTime` or `endDateTime`. Historical and forecast modes do.
+Datetime inputs must be timezone-aware, and stored lookup windows are normalized to UTC.
+
 ## Quickstart
 
 1. Create a virtual environment:

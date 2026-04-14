@@ -1,4 +1,4 @@
-from datetime import date, datetime
+from datetime import datetime
 from decimal import Decimal
 from enum import StrEnum
 from typing import Any
@@ -11,7 +11,7 @@ def to_camel(string: str) -> str:
     """Convert snake_case field names to camelCase for the external API."""
 
     parts = string.split("_")
-    return parts[0] + "".join(part.capitalize() for part in parts[1:])
+    return parts[0] + "".join("DateTime" if part == "datetime" else part.capitalize() for part in parts[1:])
 
 
 class APIModel(BaseModel):
@@ -46,21 +46,42 @@ class WeatherData(BaseModel):
     payload: dict[str, Any]
 
 
+def _ensure_timezone_aware(value: datetime | None, field_name: str) -> None:
+    """Reject naive datetimes so the API contract stays timezone-aware."""
+
+    if value is None:
+        return
+
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise ValueError(f"{field_name} must include a timezone offset.")
+
+
 class WeatherRequestBase(APIModel):
     """Shared fields for create-style weather lookup requests."""
 
     location_input: str = Field(min_length=1)
     mode: WeatherMode
-    start_date: date
-    end_date: date
+    start_datetime: datetime | None = None
+    end_datetime: datetime | None = None
     units: WeatherUnits
 
     @model_validator(mode="after")
-    def validate_dates(self) -> "WeatherRequestBase":
-        """Reject invalid date ordering before provider-specific validation runs."""
+    def validate_datetimes(self) -> "WeatherRequestBase":
+        """Apply mode-specific datetime rules before provider-specific validation runs."""
 
-        if self.start_date > self.end_date:
-            raise ValueError("startDate must be less than or equal to endDate.")
+        _ensure_timezone_aware(self.start_datetime, "startDateTime")
+        _ensure_timezone_aware(self.end_datetime, "endDateTime")
+
+        if self.mode == WeatherMode.CURRENT:
+            if self.start_datetime is not None or self.end_datetime is not None:
+                raise ValueError("current mode does not accept startDateTime or endDateTime.")
+            return self
+
+        if self.start_datetime is None or self.end_datetime is None:
+            raise ValueError("startDateTime and endDateTime are required for this mode.")
+
+        if self.start_datetime > self.end_datetime:
+            raise ValueError("startDateTime must be less than or equal to endDateTime.")
         return self
 
 
@@ -75,16 +96,31 @@ class WeatherUpdateRequest(APIModel):
 
     location_input: str | None = Field(default=None, min_length=1)
     mode: WeatherMode | None = None
-    start_date: date | None = None
-    end_date: date | None = None
+    start_datetime: datetime | None = None
+    end_datetime: datetime | None = None
     units: WeatherUnits | None = None
 
     @model_validator(mode="after")
-    def validate_partial_dates(self) -> "WeatherUpdateRequest":
-        """Validate date ordering only when both partial date fields are present."""
+    def validate_partial_datetimes(self) -> "WeatherUpdateRequest":
+        """Apply partial mode-aware validation for weather lookup updates."""
 
-        if self.start_date and self.end_date and self.start_date > self.end_date:
-            raise ValueError("startDate must be less than or equal to endDate.")
+        _ensure_timezone_aware(self.start_datetime, "startDateTime")
+        _ensure_timezone_aware(self.end_datetime, "endDateTime")
+
+        if self.mode == WeatherMode.CURRENT:
+            if self.start_datetime is not None or self.end_datetime is not None:
+                raise ValueError("current mode does not accept startDateTime or endDateTime.")
+            return self
+
+        if (self.start_datetime is None) ^ (self.end_datetime is None):
+            raise ValueError("startDateTime and endDateTime must be provided together.")
+
+        if (
+            self.start_datetime
+            and self.end_datetime
+            and self.start_datetime > self.end_datetime
+        ):
+            raise ValueError("startDateTime must be less than or equal to endDateTime.")
         return self
 
 
@@ -97,8 +133,8 @@ class WeatherQueryResponse(APIModel):
     latitude: Decimal
     longitude: Decimal
     mode: WeatherMode
-    start_date: date
-    end_date: date
+    start_datetime: datetime | None
+    end_datetime: datetime | None
     units: WeatherUnits
     weather_data: WeatherData
     created_at: datetime

@@ -7,6 +7,7 @@ Build a simple backend weather app that:
 * accepts a user location input
 * validates and resolves that location
 * fetches historical, current, and forecast weather data from external APIs
+* supports hourly weather lookups with datetime ranges where applicable
 * stores the request and retrieved result in a database
 * supports CRUD on saved weather lookups
 * supports exporting saved data
@@ -29,6 +30,7 @@ Build a simple backend weather app that:
 * geocoding with Nominatim
 * weather retrieval with Open-Meteo
 * support for historical, current, and forecast weather lookups
+* hourly weather retrieval for historical and forecast modes
 * persistence in PostgreSQL
 * CRUD on saved weather lookups
 * export as JSON and CSV
@@ -53,7 +55,7 @@ CRUD applies to saved weather lookup records.
 
 ## Core flow
 
-1. User submits `locationInput`, `mode`, `startDate`, `endDate`, `units`
+1. User submits `locationInput`, `mode`, optional `startDateTime`, optional `endDateTime`, `units`
 2. Backend validates the request
 3. Backend geocodes the location using Nominatim
 4. Backend fetches weather from Open-Meteo
@@ -72,8 +74,8 @@ Use one table for simplicity.
 * `latitude` numeric not null
 * `longitude` numeric not null
 * `mode` text not null
-* `start_date` date not null
-* `end_date` date not null
+* `start_datetime` timestamptz null
+* `end_datetime` timestamptz null
 * `units` text not null
 * `weather_data` JSONB not null
 * `created_at` timestamptz default now()
@@ -82,7 +84,7 @@ Use one table for simplicity.
 ## Persistence rules
 
 * each new lookup creates a new row
-* different date range = different row
+* different datetime range = different row
 * update modifies an existing row and replaces stored weather data
 * delete removes the row
 
@@ -98,8 +100,8 @@ Request body:
 {
   "locationInput": "London, Ontario, Canada",
   "mode": "historical",
-  "startDate": "2017-04-03",
-  "endDate": "2017-04-03",
+  "startDateTime": "2017-04-03T09:00:00-04:00",
+  "endDateTime": "2017-04-03T18:00:00-04:00",
   "units": "metric"
 }
 ```
@@ -114,9 +116,10 @@ Behavior:
 
 Mode rules:
 
-* `historical` requires `startDate` and `endDate`
-* `current` represents a current-weather lookup and stores the lookup date in both `startDate` and `endDate`
-* `forecast` requires `startDate` and `endDate`
+* `historical` requires `startDateTime` and `endDateTime`
+* `current` does not require `startDateTime` or `endDateTime`
+* `forecast` requires `startDateTime` and `endDateTime`
+* `historical` and `forecast` return hourly weather data within the requested datetime window
 
 ### `GET /weather`
 
@@ -126,8 +129,8 @@ Optional query params:
 
 * `location`
 * `mode`
-* `startDate`
-* `endDate`
+* `startDateTime`
+* `endDateTime`
 
 Response behavior:
 
@@ -143,8 +146,8 @@ Allowed fields:
 
 * `locationInput`
 * `mode`
-* `startDate`
-* `endDate`
+* `startDateTime`
+* `endDateTime`
 * `units`
 
 Behavior:
@@ -170,14 +173,16 @@ Export saved lookups.
 * if coordinates are provided, validate numeric bounds
 * geocoder must return a valid match
 
-### Dates
+### Datetimes
 
-* reject invalid date formats
-* `startDate <= endDate`
-* `historical` requires `startDate` and `endDate`
-* `current` stores the lookup date in both `startDate` and `endDate`
-* `forecast` requires `startDate` and `endDate`
-* reject date ranges unsupported by the weather provider for the selected mode
+* accept timezone-aware ISO 8601 datetime strings
+* reject naive datetimes without a timezone offset
+* if both datetimes are provided, `startDateTime <= endDateTime`
+* `historical` requires `startDateTime` and `endDateTime`
+* `current` does not require datetimes
+* `forecast` requires `startDateTime` and `endDateTime`
+* reject datetime ranges unsupported by the weather provider for the selected mode
+* normalize stored datetimes to UTC
 
 ### Mode
 
@@ -227,6 +232,7 @@ Examples:
 * prioritize clarity and working functionality over architectural complexity
 * use a stable API response wrapper while preserving relatively unprocessed provider data inside `weather_data`
 * use the first valid Nominatim match for MVP and store its display name as `normalized_location`
+* store hourly lookup windows as timezone-aware datetimes, not dates
 
 ## Response shape
 
@@ -241,9 +247,9 @@ Example shape:
   "normalizedLocation": "London, Ontario, Canada",
   "latitude": 42.98339,
   "longitude": -81.23304,
-  "mode": "historical",
-  "startDate": "2017-04-03",
-  "endDate": "2017-04-03",
+  "mode": "current",
+  "startDateTime": null,
+  "endDateTime": null,
   "units": "metric",
   "weatherData": {
     "provider": "open-meteo",
@@ -263,12 +269,14 @@ Notes:
 
 * JSON export should return saved records in the same stable wrapper shape used by the API
 * CSV export should use flat metadata columns and serialize `weather_data` as JSON text in a single column
+* CSV metadata columns should use `start_datetime` and `end_datetime`
 
 ## Acceptance criteria
 
-* user can submit a location and date/date range for historical, current, and forecast lookups
+* user can submit a location for current lookups and a location plus datetime range for historical and forecast lookups
 * backend resolves the location correctly
 * backend fetches and stores weather data for each supported mode
+* backend supports hourly weather windows for historical and forecast lookups
 * saved records can be read, updated, and deleted
 * export works in JSON and CSV
 * errors are handled cleanly

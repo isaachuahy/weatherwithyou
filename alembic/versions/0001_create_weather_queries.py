@@ -28,8 +28,8 @@ def upgrade() -> None:
         sa.Column("latitude", sa.Numeric(9, 6), nullable=False),
         sa.Column("longitude", sa.Numeric(9, 6), nullable=False),
         sa.Column("mode", sa.String(length=20), nullable=False),
-        sa.Column("start_date", sa.Date(), nullable=False),
-        sa.Column("end_date", sa.Date(), nullable=False),
+        sa.Column("start_datetime", sa.DateTime(timezone=True), nullable=True),
+        sa.Column("end_datetime", sa.DateTime(timezone=True), nullable=True),
         sa.Column("units", sa.String(length=20), nullable=False),
         sa.Column("weather_data", postgresql.JSONB(astext_type=sa.Text()), nullable=False),
         sa.Column(
