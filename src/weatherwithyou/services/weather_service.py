@@ -1,9 +1,9 @@
 from sqlalchemy.orm import Session
 
 from weatherwithyou.clients.geocoding import NominatimClient
-from weatherwithyou.clients.weather import OpenMeteoClient
+from weatherwithyou.clients.weather_client import OpenMeteoClient
 from weatherwithyou.models.weather_query import WeatherQuery
-from weatherwithyou.schemas.weather import WeatherCreateRequest, WeatherUpdateRequest
+from weatherwithyou.schemas.weather_schemas import WeatherCreateRequest, WeatherUpdateRequest
 
 
 class WeatherService:

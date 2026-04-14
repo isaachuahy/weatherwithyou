@@ -57,7 +57,7 @@ def create_weather_lookup(
         return service.create_weather_query(payload)
     except LocationNotFoundError as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail={
                 "error": {
                     "code": "LOCATION_NOT_FOUND",
@@ -109,68 +109,7 @@ def list_weather_lookups(
     return list(db_session.scalars(query))
 
 
-@router.get("/{weather_query_id}", response_model=WeatherQueryResponse)
-def get_weather_lookup(
-    weather_query_id: UUID,
-    db_session: Session = Depends(get_db_session),
-) -> WeatherQuery:
-    return _get_weather_query_or_404(db_session, weather_query_id)
-
-
-@router.patch("/{weather_query_id}", response_model=WeatherQueryResponse)
-def update_weather_lookup(
-    weather_query_id: UUID,
-    payload: WeatherUpdateRequest,
-    db_session: Session = Depends(get_db_session),
-) -> WeatherQuery:
-    weather_query = _get_weather_query_or_404(db_session, weather_query_id)
-    service = _service_for(db_session)
-
-    try:
-        return service.update_weather_query(weather_query, payload)
-    except LocationNotFoundError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, # 422 is appropriate here since the client provided a location that doesn't exist, which is a validation issue with the input rather than a server error.
-            detail={
-                "error": {
-                    "code": "LOCATION_NOT_FOUND",
-                    "message": str(exc),
-                }
-            },
-        ) from exc
-    except GeocodingProviderError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY, # 502 is appropriate here since the error occurred while trying to communicate with an external geocoding provider, which is a server-side issue outside of the client's control.
-            detail={
-                "error": {
-                    "code": "GEOCODING_PROVIDER_ERROR",
-                    "message": "Failed to resolve the provided location.",
-                }
-            },
-        ) from exc
-    except WeatherProviderError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_502_BAD_GATEWAY,
-            detail={
-                "error": {
-                    "code": "WEATHER_PROVIDER_ERROR",
-                    "message": "Failed to retrieve weather data.",
-                }
-            },
-        ) from exc
-
-@router.delete("/{weather_query_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_weather_lookup(
-    weather_query_id: UUID,
-    db_session: Session = Depends(get_db_session),
-) -> Response:
-    weather_query = _get_weather_query_or_404(db_session, weather_query_id)
-    db_session.delete(weather_query)
-    db_session.commit()
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
-
-
-@router.get("/export")
+@router.get("/export", response_model=None)
 def export_weather_lookups(
     format: str = Query(default="json", pattern="^(json|csv)$"),
     db_session: Session = Depends(get_db_session),
@@ -228,3 +167,65 @@ def export_weather_lookups(
         media_type="text/csv",
         headers={"Content-Disposition": 'attachment; filename="weather-lookups.csv"'},
     )
+
+
+@router.get("/{weather_query_id}", response_model=WeatherQueryResponse)
+def get_weather_lookup(
+    weather_query_id: UUID,
+    db_session: Session = Depends(get_db_session),
+) -> WeatherQuery:
+    return _get_weather_query_or_404(db_session, weather_query_id)
+
+
+@router.patch("/{weather_query_id}", response_model=WeatherQueryResponse)
+def update_weather_lookup(
+    weather_query_id: UUID,
+    payload: WeatherUpdateRequest,
+    db_session: Session = Depends(get_db_session),
+) -> WeatherQuery:
+    weather_query = _get_weather_query_or_404(db_session, weather_query_id)
+    service = _service_for(db_session)
+
+    try:
+        return service.update_weather_query(weather_query, payload)
+    except LocationNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, # 422 is appropriate here since the client provided a location that doesn't exist, which is a validation issue with the input rather than a server error.
+            detail={
+                "error": {
+                    "code": "LOCATION_NOT_FOUND",
+                    "message": str(exc),
+                }
+            },
+        ) from exc
+    except GeocodingProviderError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY, # 502 is appropriate here since the error occurred while trying to communicate with an external geocoding provider, which is a server-side issue outside of the client's control.
+            detail={
+                "error": {
+                    "code": "GEOCODING_PROVIDER_ERROR",
+                    "message": "Failed to resolve the provided location.",
+                }
+            },
+        ) from exc
+    except WeatherProviderError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail={
+                "error": {
+                    "code": "WEATHER_PROVIDER_ERROR",
+                    "message": "Failed to retrieve weather data.",
+                }
+            },
+        ) from exc
+
+
+@router.delete("/{weather_query_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_weather_lookup(
+    weather_query_id: UUID,
+    db_session: Session = Depends(get_db_session),
+) -> Response:
+    weather_query = _get_weather_query_or_404(db_session, weather_query_id)
+    db_session.delete(weather_query)
+    db_session.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
