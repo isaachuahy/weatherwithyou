@@ -1,15 +1,16 @@
 # Weather With You
 
-Backend weather API built with FastAPI, SQLAlchemy, and PostgreSQL.
+Weather app built with a FastAPI backend and a React/Vite frontend.
 
 Single-user MVP for now. Saved lookups are durable, but there is no authentication, user ownership, or multi-user partitioning yet.
 
-The API supports:
+The app supports:
 
 * current weather lookups by location
 * historical and forecast weather lookups by location plus datetime window
 * hourly weather data for historical and forecast modes
 * optional live response enrichment for map data, YouTube videos, and a short LLM-generated pun via `include`
+* CSV export and saved-data delete/clear actions from the frontend
 
 `current` mode does not use `startDateTime` or `endDateTime`. Historical and forecast modes do.
 Datetime inputs must be timezone-aware, and stored lookup windows are normalized to UTC.
@@ -58,6 +59,24 @@ uvicorn weatherwithyou.main:app --reload
 
 Docs will be available at `/docs`.
 
+8. In a second terminal, install and run the frontend:
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+The frontend will be available at `http://127.0.0.1:5173/`.
+
+During local development, Vite proxies `/weather` and `/health` to the backend at `http://127.0.0.1:8000`.
+
+## Frontend
+
+The frontend lives in `frontend/` and is built with React + Vite.
+
+It supports flexible location search, browser current-location lookup, current weather, a 5-day forecast, live map/video/pun enrichment, CSV export, clearing the current view, deleting displayed saved lookup rows, and clearing all saved weather rows.
+
 ## Common commands
 
 Run tests:
@@ -82,6 +101,13 @@ Apply the latest migration:
 
 ```bash
 alembic upgrade head
+```
+
+Run the frontend dev server:
+
+```bash
+cd frontend
+npm run dev
 ```
 
 Out of scope for this MVP: authentication, RBAC, caching, microservices, multi-user data ownership, and durable storage of enrichment data.

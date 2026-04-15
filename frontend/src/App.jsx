@@ -166,6 +166,8 @@ export default function App() {
   const [forecastWeather, setForecastWeather] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isLocating, setIsLocating] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [isClearingAll, setIsClearingAll] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
 
   const forecastCards = useMemo(
@@ -208,6 +210,93 @@ export default function App() {
       setErrorMessage(error instanceof Error ? error.message : "Something went wrong.");
     } finally {
       setIsLoading(false);
+    }
+  }
+
+  function clearDisplayedWeather() {
+    setCurrentWeather(null);
+    setForecastWeather(null);
+    setErrorMessage("");
+  }
+
+  async function deleteDisplayedWeather() {
+    // Current weather and five-day forecast are saved as separate backend rows, so
+    // we delete both displayed lookup IDs together when the user clears saved data.
+    const lookupIds = Array.from(
+      new Set([currentWeather?.id, forecastWeather?.id].filter(Boolean)),
+    );
+
+    if (!lookupIds.length) {
+      setErrorMessage("There is no saved weather data to delete yet.");
+      return;
+    }
+
+    setIsDeleting(true);
+    setErrorMessage("");
+
+    try {
+      const responses = await Promise.all(
+        lookupIds.map((id) =>
+          fetch(`${WEATHER_ROUTE}/${id}`, {
+            method: "DELETE",
+          }),
+        ),
+      );
+
+      const failedResponse = responses.find((response) => !response.ok);
+      if (failedResponse) {
+        throw new Error("We couldn't delete the saved weather rows right now.");
+      }
+
+      clearDisplayedWeather();
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Something went wrong.");
+    } finally {
+      setIsDeleting(false);
+    }
+  }
+
+  async function clearAllSavedWeather() {
+    setIsClearingAll(true);
+    setErrorMessage("");
+
+    try {
+      const listResponse = await fetch(WEATHER_ROUTE);
+      const savedRows = await listResponse.json();
+
+      if (!listResponse.ok) {
+        throw new Error("We couldn't load the saved weather rows right now.");
+      }
+
+      const lookupIds = Array.from(
+        new Set(savedRows.map((row) => row.id).filter(Boolean)),
+      );
+
+      if (!lookupIds.length) {
+        clearDisplayedWeather();
+        return;
+      }
+
+      // We fetch the saved rows first so this button truly clears the database
+      // state, not just the two rows currently displayed in the interface.
+      const responses = await Promise.all(
+        lookupIds.map((id) =>
+          fetch(`${WEATHER_ROUTE}/${id}`, {
+            method: "DELETE",
+          }),
+        ),
+      );
+
+      const failedResponse = responses.find((response) => !response.ok);
+      if (failedResponse) {
+        throw new Error("We couldn't clear all saved weather rows right now.");
+      }
+
+      clearDisplayedWeather();
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Something went wrong.");
+    } finally {
+      setIsClearingAll(false);
     }
   }
 
@@ -305,10 +394,6 @@ export default function App() {
             
             You can also use your current location, pull live enrichment, and export saved weather data straight from the
             database.
-
-
-            Done as part of PM Accelerator, this is their associated overview:
-            ""
           </p>
         </header>
 
@@ -409,19 +494,43 @@ export default function App() {
             >
               <button
                 type="button"
-                onClick={() => downloadExport("json")}
-                style={exportButtonStyle}
-              >
-                <Download size={16} />
-                Export JSON
-              </button>
-              <button
-                type="button"
                 onClick={() => downloadExport("csv")}
                 style={exportButtonStyle}
               >
                 <Download size={16} />
                 Export CSV
+              </button>
+              <button
+                type="button"
+                onClick={clearDisplayedWeather}
+                disabled={isLoading || isLocating || isDeleting || isClearingAll}
+                style={exportButtonStyle}
+              >
+                Clear view
+              </button>
+              <button
+                type="button"
+                onClick={deleteDisplayedWeather}
+                disabled={
+                  isLoading ||
+                  isLocating ||
+                  isDeleting ||
+                  isClearingAll ||
+                  (!currentWeather && !forecastWeather)
+                }
+                style={deleteButtonStyle}
+              >
+                {isDeleting ? <LoaderCircle size={16} /> : <AlertTriangle size={16} />}
+                Delete saved weather
+              </button>
+              <button
+                type="button"
+                onClick={clearAllSavedWeather}
+                disabled={isLoading || isLocating || isDeleting || isClearingAll}
+                style={deleteButtonStyle}
+              >
+                {isClearingAll ? <LoaderCircle size={16} /> : <AlertTriangle size={16} />}
+                Clear all saved data
               </button>
             </div>
 
@@ -646,7 +755,6 @@ export default function App() {
           >
             <h2 style={{ margin: 0 }}>Five-day forecast</h2>
             <span style={{ color: "#46617f" }}>
-              Built from the backend&apos;s hourly forecast data.
             </span>
           </div>
 
@@ -862,6 +970,13 @@ const exportButtonStyle = {
   background: "white",
   color: "#14263f",
   cursor: "pointer",
+};
+
+const deleteButtonStyle = {
+  ...exportButtonStyle,
+  border: "1px solid rgba(184, 34, 55, 0.22)",
+  color: "#8a2334",
+  background: "rgba(184, 34, 55, 0.06)",
 };
 
 const errorBannerStyle = {
