@@ -23,7 +23,15 @@ def _sample_weather_query() -> WeatherQuery:
         start_datetime=datetime(2024, 4, 1, 9, 0, tzinfo=UTC),
         end_datetime=datetime(2024, 4, 1, 18, 0, tzinfo=UTC),
         units=WeatherUnits.METRIC,
-        weather_data={"provider": "open-meteo", "payload": {"hourly": {}}},
+        weather_data={
+            "provider": "open-meteo",
+            "payload": {
+                "hourly": {
+                    "time": ["2024-04-01T09:00", "2024-04-01T10:00"],
+                    "temperature_2m": [12.3, 13.1],
+                }
+            },
+        },
         created_at=datetime(2024, 4, 1, 12, 0, tzinfo=UTC),
         updated_at=datetime(2024, 4, 1, 12, 0, tzinfo=UTC),
     )
@@ -229,6 +237,11 @@ def test_export_weather_lookups_returns_csv_rows() -> None:
     assert "attachment; filename=\"weather-lookups.csv\"" == response.headers["content-disposition"]
     assert "start_datetime,end_datetime" in response.text
     assert "2024-04-01 09:00:00+00:00" in response.text
+    assert "weather_data_provider" in response.text
+    assert "weather_data_payload_hourly_time" in response.text
+    assert "weather_data_payload_hourly_temperature_2m" in response.text
+    assert "open-meteo" in response.text
+    assert '"[""2024-04-01T09:00"", ""2024-04-01T10:00""]"' in response.text
 
 
 def test_get_weather_lookup_returns_requested_enrichment() -> None:

@@ -107,6 +107,27 @@ def _raise_weather_api_error(exc: Exception) -> None:
     raise exc
 
 
+def _flatten_export_value(prefix: str, value: object) -> dict[str, object]:
+    """Flatten nested export data into CSV-friendly columns.
+
+    Weather payloads can contain nested objects and arrays from upstream providers.
+    Flattening them here keeps CSV export readable without changing the durable
+    shape stored in the database or the JSON API contract.
+    """
+
+    if isinstance(value, dict):
+        flattened: dict[str, object] = {}
+        for key, nested_value in value.items():
+            nested_prefix = f"{prefix}_{key}" if prefix else str(key)
+            flattened.update(_flatten_export_value(nested_prefix, nested_value))
+        return flattened
+
+    if isinstance(value, list):
+        return {prefix: json.dumps(value)}
+
+    return {prefix: value}
+
+
 @router.post("", response_model=WeatherQueryResponse, status_code=status.HTTP_201_CREATED)
 def create_weather_lookup(
     payload: WeatherCreateRequest,
@@ -170,43 +191,39 @@ def export_weather_lookups(
             for weather_query in weather_queries
         ]
 
+    csv_rows = []
+    for weather_query in weather_queries:
+        row = {
+            "id": weather_query.id,
+            "location_input": weather_query.location_input,
+            "normalized_location": weather_query.normalized_location,
+            "latitude": weather_query.latitude,
+            "longitude": weather_query.longitude,
+            "mode": weather_query.mode,
+            "start_datetime": weather_query.start_datetime,
+            "end_datetime": weather_query.end_datetime,
+            "units": weather_query.units,
+            "created_at": weather_query.created_at,
+            "updated_at": weather_query.updated_at,
+        }
+        row.update(_flatten_export_value("weather_data", weather_query.weather_data))
+        csv_rows.append(row)
+
+    fieldnames = []
+    for row in csv_rows:
+        for key in row:
+            if key not in fieldnames:
+                fieldnames.append(key)
+
     buffer = StringIO()
     writer = csv.DictWriter(
         buffer,
-        fieldnames=[
-            "id",
-            "location_input",
-            "normalized_location",
-            "latitude",
-            "longitude",
-            "mode",
-            "start_datetime",
-            "end_datetime",
-            "units",
-            "weather_data",
-            "created_at",
-            "updated_at",
-        ],
+        fieldnames=fieldnames,
     )
     writer.writeheader()
 
-    for weather_query in weather_queries:
-        writer.writerow(
-            {
-                "id": weather_query.id,
-                "location_input": weather_query.location_input,
-                "normalized_location": weather_query.normalized_location,
-                "latitude": weather_query.latitude,
-                "longitude": weather_query.longitude,
-                "mode": weather_query.mode,
-                "start_datetime": weather_query.start_datetime,
-                "end_datetime": weather_query.end_datetime,
-                "units": weather_query.units,
-                "weather_data": json.dumps(weather_query.weather_data),
-                "created_at": weather_query.created_at,
-                "updated_at": weather_query.updated_at,
-            }
-        )
+    for row in csv_rows:
+        writer.writerow(row)
 
     return Response(
         content=buffer.getvalue(),
