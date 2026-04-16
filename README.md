@@ -1,5 +1,7 @@
 # Weather With You
 
+Demo: [https://drive.google.com/file/d/1beOlZcalK8E2bHTUQ2kTPxAqb5jFKPTy/view?usp=sharing]
+
 Weather app built with a FastAPI backend and a React/Vite frontend.
 
 Single-user MVP for now. Saved lookups are durable, but there is no authentication, user ownership, or multi-user partitioning yet.
